@@ -63,6 +63,32 @@ using namespace strata::v41;
 
 namespace {
 
+// Optional Windows UMA experiment: release pageable upload/source pages after model loading.
+// Mappings remain valid and Windows brings pages back on demand; GPU buffers and locked arenas
+// are not freed. Keep this off by default, and never trim the CPU backend's active weights.
+void trim_upload_working_set(ggml_backend_t backend, const char * phase) {
+#if defined(_WIN32)
+    const char * value = std::getenv("STRATA_DS41_TRIM_UPLOAD_WS");
+    if (!value || std::strcmp(value, "1") != 0 || ggml_backend_is_cpu(backend)) return;
+    ggml_backend_synchronize(backend);
+    MEMORYSTATUSEX before{};
+    before.dwLength = sizeof(before);
+    GlobalMemoryStatusEx(&before);
+    if (!SetProcessWorkingSetSize(GetCurrentProcess(), SIZE_T(-1), SIZE_T(-1))) {
+        std::fprintf(stderr, "\nworking-set trim after %s failed: Windows error %lu\n", phase, GetLastError());
+        return;
+    }
+    MEMORYSTATUSEX after{};
+    after.dwLength = sizeof(after);
+    GlobalMemoryStatusEx(&after);
+    std::fprintf(stderr, "\nworking-set trim after %s: available RAM %.2f -> %.2f GiB\n", phase,
+                 before.ullAvailPhys / 1073741824.0, after.ullAvailPhys / 1073741824.0);
+#else
+    (void) backend;
+    (void) phase;
+#endif
+}
+
 struct Args {
     std::string model, ids_csv, ids_file, rank, dump_logits, dump_last, dump_topk, kl_ref;
     std::string score_cases, score_out;   // --score-cases / --score-out: teacher-forced continuations (official_score.py)
@@ -486,12 +512,18 @@ int main(int argc, char ** argv) {
     if (a.backend == "cuda" && !a.gpus.empty()) {   // --gpus: the dense half on the first card listed (the n-th GPU device)
         for (size_t i = 0, g = 0; i < ggml_backend_dev_count() && !be; ++i) {
             ggml_backend_dev_t d = ggml_backend_dev_get(i);
-            if (ggml_backend_dev_type(d) != GGML_BACKEND_DEVICE_TYPE_GPU) continue;
+            const auto type = ggml_backend_dev_type(d);
+            if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
             if ((int) g++ == a.gpus[0]) be = ggml_backend_dev_init(d, nullptr);
         }
     } else {
         be = a.backend == "cuda" ? ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr)
                                  : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        // CUDA classifies shared-memory devices such as RTX Spark as IGPU. Keep the existing discrete-GPU
+        // preference, but do not reject a working CUDA backend solely because its memory is integrated.
+        if (!be && a.backend == "cuda") {
+            be = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+        }
     }
     if (!be) { std::fprintf(stderr, "ds41_generate: no %s backend\n", a.backend.c_str()); return 1; }
     if (ggml_backend_is_cpu(be)) ggml_backend_cpu_set_n_threads(be, a.threads > 0 ? a.threads : 8);
@@ -546,6 +578,7 @@ int main(int argc, char ** argv) {
     std::string err;
     const double t_load = now_ms();
     if (!dense.init(a.model, dc, err)) { std::fprintf(stderr, "ds41_generate: dense init: %s\n", err.c_str()); return 1; }
+    trim_upload_working_set(be, "dense upload");
     const Ds41Geometry & G = dense.geom();
     const int n_layer = (int) dense.n_layer(), n_embd = (int) G.n_embd, top_k = (int) G.n_used, nv = (int) G.vocab;
     // enc-skip's layer 20: the LAST kv source (every compressed-KV / index-key write is owned by a kv source, and the
@@ -1556,6 +1589,7 @@ int main(int argc, char ** argv) {
             } else {
                 std::fprintf(stderr, "\nDSpark: %s, %.2f GB of weights on the card (%.1f s)", dsp_path, dsp->weight_bytes() / 1e9,
                              (now_ms() - ti) / 1000.0);
+                trim_upload_working_set(be, "DSpark upload");
             }
         }
 #endif

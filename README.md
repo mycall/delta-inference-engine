@@ -206,6 +206,12 @@ three together +12% writing speed (21.7 -> 24.3 tok/s at the time), the RAM spee
 While it writes, a busy browser or game on the same PC can slow the CPU side down a lot; the engine already runs above
 normal priority.
 
+On Windows GPUs, `STRATA_DS41_TRIM_UPLOAD_WS=1` is an optional experiment for limited system RAM, including UMA
+machines. After the dense weights and drafter finish uploading, the engine asks Windows to release pageable pages
+from its working set. The mappings stay valid; Windows reads pages back if needed. This does not change the weights
+or free the GPU buffers. It is off by default and has no effect on the CPU backend or other operating systems.
+Compare available RAM and response times on your PC before increasing `DS41_ARENA_GIB` to use the recovered space.
+
 ## Agents, chats and tools
 
 **Connecting an agent or chat app.**  Start DeepSeek first.  The server is at `http://127.0.0.1:8080`, any API key

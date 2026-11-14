@@ -13,11 +13,16 @@
   into exl3/ and names the folder in model-choice.txt).  The engine then runs the default GGUF's dense layers and Engram
   with these experts (--exl3 FOLDER, added to the args here).
 * "--arena-gib" "auto": the pinned/locked RAM arena that holds the routed experts the GPU cache cannot.  It is sized
-  from the installed RAM: total - DS41_RAM_RESERVE_GIB (default 28 GiB: the engine's own ~12-14 GiB outside the
+  from host-visible physical RAM (excluding any dedicated GPU reservation): total - DS41_RAM_RESERVE_GIB
+  (default 28 GiB: the engine's own ~12-14 GiB outside the
   arena - dense half, KV, prefill buffers, Engram hot set; measured - plus ~14 GiB for Windows and other programs;
   a 64 GB PC gets a 31 GiB arena, a 96 GB PC 61, both tested without paging), capped at 140 GiB
   (15,102 of the 15,360 experts; more buys nothing).  192 GB -> 140 GiB, 128 GB -> ~89 GiB: the other experts are
-  read from the NVMe drive on demand (O_DIRECT), so less RAM costs speed, not correctness.  DS41_ARENA_GIB=N overrides.
+  read from the NVMe drive on demand (O_DIRECT), so less RAM costs speed, not correctness.  The minimum is 1 GiB,
+  allowing a small arena when a GPU reservation leaves about 30 GiB for the host. DS41_ARENA_GIB=N overrides;
+  explicit sizes must leave at least 3 GiB of host physical RAM outside the arena.
+* DS41_PROMPT_BATCH=N: override --prompt-batch with a positive integer; model-specific safety caps still apply.
+  Unset: keep the config's batch size. Smaller batches reduce GPU workspace at a possible cost to prompt speed.
 * "model_name" / "display_name": named after the model file the engine loads (deepseek-v4.1-flash-1017-ds4-q2 /
   -gsq-iq2_xs / -ud-iq1_s ...; "DeepSeek V4.1 Flash · Unsloth UD-IQ1_S"), so /v1/models and the chat page say which
   one runs.  A model_name of your own in the config is kept.  The server answers any model name a client sends.
@@ -47,6 +52,7 @@ import cpu_level  # noqa: E402  (same folder)
 
 ROOT =os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ARENA_CAP_GIB = 140
+ARENA_MIN_FREE_GIB = 3.0                                         # engine's default host-memory floor
 KEEP_ALL_RAM_GIB = 80                                             # below: the drafter keeps 64 experts per block
 DSPARK_KEEP_SMALL = "tools/v41/serve/dspark_expert_counts_1017.txt:96,64,32"
 DSPARK_KEEP_BIG = "tools/v41/serve/dspark_expert_counts_1017.txt:112,80,48"   # the launcher's value on 22 GB+  # Start DeepSeek.bat's value for cards under 22 GB
@@ -126,9 +132,14 @@ def arena_gib():
     if fixed is not None:
         if fixed < 1:
             sys.exit(f"ds41_local: DS41_ARENA_GIB={fixed:g} - the expert arena needs at least 1 GiB")
+        total = total_ram_gib()
+        if fixed + ARENA_MIN_FREE_GIB > total:
+            sys.exit(f"ds41_local: DS41_ARENA_GIB={fixed:g} cannot fit in {total:.1f} GiB of host-visible physical RAM "
+                     f"while leaving {ARENA_MIN_FREE_GIB:g} GiB for the host. Dedicated GPU memory is not host RAM. "
+                     "Remove DS41_ARENA_GIB from ds41-paths.bat to size automatically, or reduce it.")
         return fixed
     reserve = env_gib("DS41_RAM_RESERVE_GIB", 28.0)
-    return max(16.0, min(ARENA_CAP_GIB, int(total_ram_gib() - reserve)))
+    return max(1.0, min(ARENA_CAP_GIB, int(total_ram_gib() - reserve)))
 
 
 def expand(cfg):
@@ -217,6 +228,20 @@ def expand(cfg):
     for i, x in enumerate(a[:-1]):
         if x == "--arena-gib" and a[i + 1] == "auto":
             a[i + 1] = f"{arena_gib():g}"
+    # An optional batch limit for machines that share RAM with the GPU. Apply it before the model-specific
+    # caps below so choosing a larger value cannot bypass those caps. Unset: keep the config's batch size.
+    pb = os.environ.get("DS41_PROMPT_BATCH", "").strip()
+    if pb:
+        try:
+            batch = int(pb)
+        except ValueError:
+            batch = 0
+        if not 1 <= batch <= 2147483647:
+            sys.exit(f"ds41_local: DS41_PROMPT_BATCH={pb!r} must be a positive 32-bit integer (ds41-paths.bat)")
+        if "--prompt-batch" in a[:-1]:
+            a[a.index("--prompt-batch") + 1] = str(batch)
+        else:
+            a += ["--prompt-batch", str(batch)]
     # the route bias: the config's 0.28 on every PC; DS41_ROUTE_BIAS overrides it (0 = exact routing, 0.10 = the
     # high-agreement setting: 91.8 / 92.8% next-token agreement with DeepSeek's API vs 90.2 / 92.4% at 0.28, for about
     # 18% of writing speed at 192 GB and 12-26% on 96 / 64 GB PCs - rounds 249, 250d, 250e, 250g, 2026-10-30 / 31)
