@@ -91,11 +91,14 @@ def download(url, dst):
 
 
 def main():
+    name = cpu_level.release_zip()
+    if name is None:
+        print("No ARM64 prebuilt engine is published; run build-ds41.bat to build the native engine.")
+        return 2
     base = release_base()
     if base is None:
         print("No release location known (no GitHub 'origin' remote, no tools\\v41\\serve\\release-url.txt).")
         return 2
-    name = cpu_level.release_zip()
     folder = name[:-4]
     url = base + name
     if sys.argv[1:] == ["--url"]:

@@ -9,6 +9,7 @@
 // no symbol of `strata_kernels` / `strata_engine`, so a binary that links it (this slice's gate) cannot
 // initialise the driver - accidental or otherwise.  Compiled with `DS4_MOE_CUDA` it is the full three-tier
 // implementation.  `tools/ds4/cmake/ds4_moe.cmake` builds both.
+#include "strata/platform/cpu.hpp"
 #include "ds41_moe.hpp"
 #include "ds41_transcode.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
@@ -50,9 +51,6 @@
 #include "ds41_remote.hpp"
 
 #include <cuda_runtime.h>
-#if defined(_MSC_VER)
-#include <immintrin.h>   // _mm_pause (ds41_cuda_event_spin)
-#endif
 #include <cuda_profiler_api.h>
 #if defined(DS4_MOE_MMQ)
 #include "strata/prefill/moe_mmq.hpp"
@@ -7642,7 +7640,7 @@ void ds41_cuda_event_spin(void* ev) {
     if (!ev) return;
     while (cudaEventQuery((cudaEvent_t) ev) == cudaErrorNotReady) {
 #if defined(_MSC_VER)
-        _mm_pause();
+        strata::platform::spin_pause();
 #endif
     }
     if (cudaPeekAtLastError() == cudaErrorNotReady) (void) cudaGetLastError();

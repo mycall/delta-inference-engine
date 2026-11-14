@@ -3,6 +3,10 @@
 # root's variables (_strata_gpu_include_directories, _strata_gpu_runtime_target) and targets are visible.
 
 if(STRATA_NATIVE_EXPERTS AND TARGET strata_kernels_cpu)
+  if(STRATA_ARM64)
+    add_executable(arm64_cpu_test EXCLUDE_FROM_ALL src/kernels/cpu/arm64_cpu_test.cpp)
+    target_link_libraries(arm64_cpu_test PRIVATE strata_kernels_cpu)
+  endif()
   # PTQ1_0 ternary expert rows (DeepSeek-V4.1 mixed tier); native_expert.cpp calls them (function-level AVX2
   # attributes, no per-file flags)
   target_sources(strata_kernels_cpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu/ptq1_0.cpp)
@@ -13,7 +17,7 @@ if(STRATA_NATIVE_EXPERTS AND TARGET strata_kernels_cpu)
   option(STRATA_MSVC_KERNEL_AVX2 "MSVC: compile ptq1_0.cpp and native_expert.cpp with /arch:AVX2" ON)
   # not for the older-CPU builds (STRATA_ISA_FLOOR): native_expert.cpp runs on every CPU expert row, so /arch:AVX2 there
   # would put AVX2 instructions in front of a CPU without them
-  if(MSVC AND STRATA_MSVC_KERNEL_AVX2 AND STRATA_ISA_FLOOR STREQUAL "")
+  if(MSVC AND NOT STRATA_ARM64 AND STRATA_MSVC_KERNEL_AVX2 AND STRATA_ISA_FLOOR STREQUAL "")
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu/ptq1_0.cpp
                                 ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu/native_expert.cpp
                                 PROPERTIES COMPILE_OPTIONS "/arch:AVX2")

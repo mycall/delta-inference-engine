@@ -5719,6 +5719,10 @@ def make_handler(svc: Service):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"                       # SSE ends by closing the connection
 
+        def version_string(self):
+            # Avoid advertising the Python patch level on every API and static response.
+            return "Strata"
+
         record = None                                       # #332: this request's monitor record, if kept
         watch_done = None                                   # #430 #431: stops this request's disconnect watcher
         body_read = False                                   # whether a handler took this request's body
@@ -5877,6 +5881,7 @@ def make_handler(svc: Service):
             return False
 
         def end_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
             # HTTP/1.0 without keep-alive: the server closes the connection after every response.  Say so, or a
             # client that pools connections (.NET's SocketsHttpHandler) can put its next request on this socket
             # before the close reaches it, and that request fails with "response ended prematurely" without the

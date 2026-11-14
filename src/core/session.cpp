@@ -1,4 +1,5 @@
 // src/core/session.cpp - one token through all 48 layers.  See the header for why the graphs are per-layer.
+#include "strata/platform/cpu.hpp"
 #include "strata/core/session.hpp"
 #include "strata/kernels/mrope.hpp"
 #include "strata/core/progress.hpp"
@@ -20,14 +21,8 @@
 #include <cstring>
 #include <vector>
 
-// `_mm_pause` for the doorbell spin.  Guarded because it is x86-only; a target without it still builds, the
-// spin is just less polite to the pipeline.
-#if defined(_MSC_VER) || defined(__x86_64__) || defined(__i386__)
-#include <immintrin.h>
-#define STRATA_SPIN_PAUSE() _mm_pause()
-#else
-#define STRATA_SPIN_PAUSE() ((void) 0)
-#endif
+// Architecture-specific spin hint for the doorbell handshake.
+#define STRATA_SPIN_PAUSE() strata::platform::spin_pause()
 
 namespace strata::core {
 namespace {
@@ -969,7 +964,7 @@ bool session_run_token(const ModelGeometry& g, int64_t pos, int32_t pos_base, Se
         progress_at("token: the CPU experts of layer", l);
         if (pool != nullptr) pool(user, s.db->h_x_f, s.db->h_ids, s.db->h_weights, g.n_embd, s.k, y_miss_host);
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        _mm_sfence();
+        strata::platform::store_fence();
         *flag = want;
         const auto t2 = Clock::now();
         tg.ms_wait += std::chrono::duration<double, std::milli>(t1 - t0).count();

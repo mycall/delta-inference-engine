@@ -1236,12 +1236,41 @@ if(STRATA_BUILD_TESTS OR STRATA_BUILD_CONVERSATION_TESTS)
   add_test(NAME batch_groups_test COMMAND batch_groups_test)
 endif()
 
-add_library(strata_kernels_cpu STATIC src/kernels/cpu/expert.cpp src/kernels/cpu/pool.cpp
+option(STRATA_ARM64 "Experimental native ARM64 CPU kernels (CUDA on Windows ARM64)" OFF)
+if(STRATA_ARM64)
+  if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+    message(FATAL_ERROR "STRATA_ARM64 requires an ARM64 target")
+  endif()
+  if(STRATA_PORTABLE OR STRATA_ISA_FLOOR)
+    message(FATAL_ERROR "STRATA_ARM64 cannot use an x86 portable build or ISA floor")
+  endif()
+  if(WIN32 AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    message(FATAL_ERROR "Windows ARM64 requires clang-cl for ggml's NEON CPU backend")
+  endif()
+  if(WIN32)
+    # These host loops poll mapped GPU flags. ARM needs acquire/release ordering
+    # for their volatile accesses, matching MSVC's existing x64 semantics.
+    set_property(SOURCE src/core/session.cpp src/core/verify.cpp src/core/mtp.cpp
+      APPEND PROPERTY COMPILE_OPTIONS "/volatile:ms")
+  endif()
+  add_library(strata_kernels_cpu STATIC src/kernels/cpu/expert_neon.cpp
+              src/kernels/cpu/pool.cpp src/kernels/cpu/expert_layout.cpp)
+  if(MSVC)
+    set_source_files_properties(src/kernels/cpu/expert_neon.cpp PROPERTIES COMPILE_OPTIONS
+      "-march=armv8.2-a+dotprod+fp16;/clang:-ffp-contract=off")
+  else()
+    set_source_files_properties(src/kernels/cpu/expert_neon.cpp PROPERTIES COMPILE_OPTIONS
+      "-march=armv8.2-a+dotprod+fp16;-ffp-contract=off")
+  endif()
+else()
+  add_library(strata_kernels_cpu STATIC src/kernels/cpu/expert.cpp src/kernels/cpu/pool.cpp
             src/kernels/cpu/expert_layout.cpp src/kernels/cpu/q2_avx2.cpp)
+endif()
 target_include_directories(strata_kernels_cpu PUBLIC include)
 # Plan v0.3 P6: only the kernel files get the AVX-512 / AVX2 flags; the pool and the probe run on any x86-64,
 # and the engine picks the kernels at run time (cpu_avx512_ok).  clang-cl counts as MSVC but, like clang, needs every
 # feature its intrinsics use (/arch:AVX512 has no VNNI / VBMI): it takes the GCC/Clang spelling below.
+if(NOT STRATA_ARM64)
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   set_source_files_properties(src/kernels/cpu/expert.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
   set_source_files_properties(src/kernels/cpu/q2_avx2.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
@@ -1280,6 +1309,7 @@ else()
 endif()
 set_property(SOURCE src/kernels/cpu/q2_avx2.cpp APPEND PROPERTY COMPILE_DEFINITIONS ${_strata_avxvnni})
 set_property(SOURCE src/kernels/cpu/exl3_cpu.cpp APPEND PROPERTY COMPILE_DEFINITIONS ${_strata_avxvnni})   # Delta (C2): the EXL3 band kernels' VNNI byte sums
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(strata_kernels_cpu PUBLIC Threads::Threads)
 
@@ -1307,7 +1337,10 @@ if(STRATA_NATIVE_EXPERTS)
   set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
   set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  if(STRATA_PORTABLE)
+  if(STRATA_ARM64)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+  elseif(STRATA_PORTABLE)
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
     foreach(_f GGML_AVX GGML_AVX2 GGML_FMA GGML_F16C GGML_BMI2)
       set(${_f} ON CACHE BOOL "" FORCE)
@@ -1371,6 +1404,11 @@ if(STRATA_NATIVE_EXPERTS)
   endif()
   # part of strata_kernels_cpu (the pool calls these and they call its CPU probe: one library, so GNU ld's
   # one-pass static linking has no cycle to resolve)
+  if(STRATA_ARM64)
+    target_sources(strata_kernels_cpu PRIVATE src/kernels/cpu/native_expert.cpp
+      src/kernels/cpu/exl3_cpu.cpp src/kernels/cpu/exl3_ref.cpp src/kernels/cpu/exl3_native.cpp)
+    target_include_directories(strata_kernels_cpu PRIVATE third_party/ggml)
+  else()
   target_sources(strata_kernels_cpu PRIVATE src/kernels/cpu/native_expert.cpp src/kernels/cpu/iq_avx512.cpp
                                            src/kernels/cpu/iq_avx2.cpp src/kernels/cpu/kq_avx2.cpp
                                            src/kernels/cpu/kq_avx1.cpp src/kernels/cpu/q2_avx1.cpp src/kernels/cpu/iq_avx1.cpp
@@ -1412,6 +1450,7 @@ if(STRATA_NATIVE_EXPERTS)
                                 "-msse4.2;-mavx;-mno-avx2;-mno-fma;-mno-f16c")
   endif()
   set_property(SOURCE src/kernels/cpu/iq_avx2.cpp APPEND PROPERTY COMPILE_DEFINITIONS ${_strata_avxvnni})
+  endif()
   if(STRATA_ISA_FLOOR STREQUAL "avx")
     target_compile_definitions(strata_kernels_cpu PRIVATE STRATA_ISA_FLOOR_AVX=1)
   elseif(STRATA_ISA_FLOOR STREQUAL "none")

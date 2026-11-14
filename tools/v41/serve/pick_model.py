@@ -129,8 +129,8 @@ def exl3_ready(m, d):
 
 
 def _download(hf, args, name):
-    """hf download ARGS through hf_get.py: the PC stays awake, one progress line, a stalled or failed download is
-    started again (it resumes).  -> its exit code"""
+    """hf download ARGS through hf_get.py: keep the PC awake, show progress and retry failed runs.
+    Leave running transfers alone even when files on disk are not growing.  -> its exit code"""
     import hf_get
     return hf_get.run(args, hf_cmd=hf, label=name)
 

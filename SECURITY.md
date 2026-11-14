@@ -50,3 +50,22 @@ this PC only. The details and every setting are in [docs/DETAILS.md](docs/DETAIL
   `"api_monitor": true` is set.
 
 Delta has not had an outside security audit yet.
+
+## Local dependency and network checks
+
+On Windows, `tools/security/scan.ps1 -Trivy C:\path\to\trivy.exe` downloads llama.cpp's published advisories,
+scans the working tree (including development dependencies) with Trivy, and separately scans the installed Python
+package versions. Install Trivy from its official release and verify the checksum first. The script disables Trivy
+telemetry and writes reports under the ignored `logs/` directory; secret findings can contain sensitive text, so do
+not publish raw reports. This is an on-demand check, not a background notification service.
+
+The [2026-11-14 local review](tools/security/review-2026-11-14.json) records the tested RTX Spark build, patches,
+findings and limits. Native sources need their own advisory and patch review: a clean package scan does not cover
+the custom ARM64 PyTorch wheel or prove the C++ engine safe. ZAP's passive scan checks web responses; outbound-code
+review and process connection monitoring address different questions.
+
+The vendor security fixes and helper requirement updates are kept in `tools/xolotl/ggml/xolotl-ggml.patch`, so the
+normal vendor checkout step reapplies them. The converter helpers now require Python 3.11+; the tested CLIP conversion
+is recorded in the review, not a claim that every legacy converter/model combination was exercised. Pillow's
+vulnerable Python 3.10 fallback is no longer installed. Existing 3.10 environments must upgrade Python and reinstall
+their dependencies to remove an old Pillow wheel; changing the requirements file alone does not uninstall it.

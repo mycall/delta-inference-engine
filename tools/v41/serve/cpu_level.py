@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 r"""cpu_level.py - which engine build can run on this CPU.
 
-    cpu_level.py                 prints this CPU's level: avx512, avx2, avx or sse
+    cpu_level.py                 prints this CPU's level: arm64, avx512, avx2, avx or sse
     cpu_level.py --pick-build    prints the engine build folder to use (exit 1 with an explanation if none fits)
     cpu_level.py --check         the same, silent when one fits
     cpu_level.py --release-zip   the prebuilt engine's file name for this CPU (build-ds41-portable / -compat-avx /
                                  -compat .zip)
 
-The engine comes in four builds (build-ds41.bat): this PC's own (build-ds41\, built for the CPU it was built on),
+The native ARM64 engine is build-ds41-arm64; it never uses an x86 release download.
+The x86 engine comes in four builds (build-ds41.bat): this PC's own (build-ds41\, built for the CPU it was built on),
 the portable one (build-ds41-portable\, any CPU with AVX2: Intel 2013+ Haswell, every AMD Ryzen), one for CPUs with
 AVX but not AVX2 (build-ds41-compat-avx\: Sandy / Ivy Bridge) and one for the oldest (build-ds41-compat\, any x86-64
 CPU with SSE4.2: Intel 2008+; slower).  Each records the level it needs
@@ -20,12 +21,13 @@ files there."""
 import ctypes
 import mmap
 import os
+import platform
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 RANK = {"sse": 0, "avx": 1, "avx2": 2, "avx512": 3}
 # folder -> the level it needs when it has no cpu-level.txt
-BUILDS = [("build-ds41", None), ("build-ds41-portable", "avx2"), ("build-ds41-compat-avx", "avx"),
+BUILDS = [("build-ds41-arm64", "arm64"), ("build-ds41", None), ("build-ds41-portable", "avx2"), ("build-ds41-compat-avx", "avx"),
           ("build-ds41-compat", "sse")]
 # text only a 0.94 engine contains (bounded replay's start-up line, ds41_generate.cpp; 0.93 used the Q5_K Engram reader's
 # message) - an older engine counts as out of date and is replaced, so an update gets the 0.94 engine fixes
@@ -40,11 +42,31 @@ def plain_paths():
     return all(p.isascii() for p in (ROOT, os.environ.get("DS41_MODELS", "")))
 
 
+def native_arm64():
+    """Detect Windows ARM64 even when Python itself runs under x64 emulation."""
+    if os.name == "nt":
+        try:
+            k = ctypes.windll.kernel32
+            k.GetCurrentProcess.restype = ctypes.c_void_p
+            k.IsWow64Process2.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ushort),
+                                         ctypes.POINTER(ctypes.c_ushort)]
+            process, native = ctypes.c_ushort(), ctypes.c_ushort()
+            if k.IsWow64Process2(k.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)):
+                return native.value == 0xAA64
+        except AttributeError:
+            pass
+    return platform.machine().lower() in ("arm64", "aarch64") or any(
+        os.environ.get(key, "").lower() == "arm64"
+        for key in ("PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432"))
+
+
 def level():
     """this CPU's level from the OS (no AVX instruction is run to find out); DS41_CPU_LEVEL overrides it (tests)"""
     forced = os.environ.get("DS41_CPU_LEVEL", "")
-    if forced in RANK:
+    if forced in RANK or forced == "arm64":
         return forced
+    if native_arm64():
+        return "arm64"
     if os.name == "nt":
         k = ctypes.windll.kernel32
         # PF_AVX512F_INSTRUCTIONS_AVAILABLE 41, PF_AVX2_INSTRUCTIONS_AVAILABLE 40, PF_AVX_INSTRUCTIONS_AVAILABLE 39: true
@@ -79,7 +101,7 @@ def needs(folder, floor):
     try:
         with open(os.path.join(d, "cpu-level.txt"), encoding="utf-8") as f:
             v = f.read().strip()
-        if v in RANK:
+        if v in RANK or v == "arm64":
             return v
     except OSError:
         pass
@@ -117,7 +139,10 @@ def ram_gb():
 
 def release_zip():
     """the prebuilt engine for this CPU on the Releases page"""
-    r = RANK[level()]
+    cpu = level()
+    if cpu == "arm64":
+        return None  # The published portable/compat engines are x86-64.
+    r = RANK[cpu]
     if r >= RANK["avx2"]:
         return "build-ds41-portable.zip"
     return "build-ds41-compat-avx.zip" if r >= RANK["avx"] else "build-ds41-compat.zip"
@@ -135,8 +160,11 @@ def pick_build():
             old.append(folder)
             continue
         found.append(f"{folder} (needs {n})")
-        if RANK[cpu] >= RANK[n]:
+        if (cpu == n == "arm64") or (cpu in RANK and n in RANK and RANK[cpu] >= RANK[n]):
             return folder, None
+    if cpu == "arm64":
+        return None, ("This PC is ARM64. It needs a native ARM64 engine; the portable/compat downloads are x86-64.\n"
+                      "Run build-ds41.bat to build build-ds41-arm64 with Clang and the ARM64 CUDA Toolkit.")
     if not found and old:
         if not plain_paths():
             return None, (f"the engine in {', '.join(old)} is from an older version of this project (it cannot open files "
@@ -163,7 +191,11 @@ def main():
             print(folder)
         return 0
     if a == ["--release-zip"]:
-        print(release_zip())
+        name = release_zip()
+        if name is None:
+            print("No ARM64 prebuilt engine is published; build it locally with build-ds41.bat.")
+            return 2
+        print(name)
         return 0
     if a == ["--ram-gb"]:   # first-start's note when the PC has less RAM than the README asks for
         print(ram_gb())

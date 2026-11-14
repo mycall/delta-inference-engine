@@ -2,8 +2,8 @@
 rem no usage reports to Hugging Face (downloads only)
 set HF_HUB_DISABLE_TELEMETRY=1
 rem Download and prepare the model files into DS41_MODELS (ds41-paths.bat).  "Start DeepSeek.bat" runs this for you when
-rem files are missing.  The downloads run through tools\v41\serve\hf_get.py: the PC stays awake, a stalled download is
-rem started again, a failed one is tried again after a pause, and one line shows the progress.  Safe to re-run:
+rem files are missing.  The downloads run through tools\v41\serve\hf_get.py: the PC stays awake, failed runs are
+rem tried again after a pause, and Hugging Face shows live progress in a terminal.  Safe to re-run:
 rem finished steps are skipped, the Hugging Face downloads resume, and every large file is checked against the SHA-256
 rem its repository publishes before it is used.  Downloads ~375 GB; needs ~385 GB free while it runs and ~371 GB when
 rem done.  Needs .venv (README.md, Setup step 1) and the build (step 2).
@@ -166,13 +166,8 @@ if exist "%M%\%VG%.ok" goto vision_torch
 rem PyTorch: any build does on the CPU; a card needs the CUDA one (a CPU build there is replaced)
 if /i "%VTORCH%"=="cuda" goto voice
 if /i "%VTORCH%"=="cpu" if /i not "%VPLAN%"=="cuda" goto voice
-set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
-if /i "%VPLAN%"=="cuda" set "TORCH_INDEX=https://download.pytorch.org/whl/cu130"
-if /i "%VPLAN%"=="cuda" echo Pictures on the second card need PyTorch's CUDA build: a 2.0 GB download, ~2.9 GB in .venv.
-echo Installing PyTorch for pictures from %TORCH_INDEX% ...
-rem not --force-reinstall: that would also replace its dependencies (jinja2 is pinned in requirements.txt)
-"%PY%" -m pip uninstall -y -q torch >nul 2>&1
-"%PY%" -m pip install -q --disable-pip-version-check torch==2.14.1 --index-url %TORCH_INDEX% || exit /b 1
+rem Select wheels for the Python architecture and version (Windows ARM64 3.14 needs NVIDIA's index).
+"%PY%" tools\v41\serve\install_torch.py %VPLAN% || exit /b 1
 
 :voice
 rem 6. Voice (off unless voice-choice.txt or DS41_VOICE says cpu or gpu; "Enable Voice.bat" sets it): dictation and

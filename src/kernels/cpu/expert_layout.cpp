@@ -1,4 +1,5 @@
 // src/kernels/cpu/expert_layout.cpp - plan v0.3 P6: the per-layer expert table.  See the header.
+#include "strata/platform/cpu.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
 
 #include <atomic>
@@ -6,10 +7,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#if defined(_MSC_VER)
+#if STRATA_CPU_X86 && defined(_MSC_VER)
 #include <intrin.h>
 #include <immintrin.h>
-#else
+#elif STRATA_CPU_X86
 #include <cpuid.h>
 #endif
 #include <fstream>
@@ -38,6 +39,7 @@ int cpu_isa_cap() {
     return cap;
 }
 
+#if STRATA_CPU_X86
 bool cpu_avx512_ok() {
     static const bool ok = [] {
         if (const char* f = std::getenv("STRATA_FORCE_AVX2"); f != nullptr && f[0] == '1') return false;
@@ -72,7 +74,11 @@ bool cpu_avx512_ok() {
     }();
     return ok;
 }
+#else
+bool cpu_avx512_ok() { return false; }
+#endif
 
+#if STRATA_CPU_X86
 bool cpu_avx512bw_ok() {
     static const bool ok = [] {
         if (const char* f = std::getenv("STRATA_FORCE_AVX2"); f != nullptr && f[0] == '1') return false;
@@ -106,7 +112,11 @@ bool cpu_avx512bw_ok() {
     }();
     return ok;
 }
+#else
+bool cpu_avx512bw_ok() { return false; }
+#endif
 
+#if STRATA_CPU_X86
 bool cpu_avx2_ok() {
     static const bool ok = [] {
         if (cpu_isa_cap() < 2) return false;
@@ -141,7 +151,11 @@ bool cpu_avx2_ok() {
     }();
     return ok;
 }
+#else
+bool cpu_avx2_ok() { return false; }
+#endif
 
+#if STRATA_CPU_X86
 bool cpu_avx1_ok() {
     // AVX (Sandy Bridge, 2011): AVX + OSXSAVE with the OS saving the YMM state; FMA, F16C and AVX2 not needed.
     // From the Strata_Dirigo fork (rwkeyes).
@@ -169,7 +183,11 @@ bool cpu_avx1_ok() {
     }();
     return ok;
 }
+#else
+bool cpu_avx1_ok() { return false; }
+#endif
 
+#if STRATA_CPU_X86
 bool cpu_sse42_ok() {
     static const bool ok = [] {
         unsigned r[4] = {0, 0, 0, 0};
@@ -184,6 +202,9 @@ bool cpu_sse42_ok() {
     }();
     return ok;
 }
+#else
+bool cpu_sse42_ok() { return false; }
+#endif
 
 const char* isa_floor_build() {
 #if defined(STRATA_ISA_FLOOR_AVX)
@@ -197,7 +218,10 @@ const char* isa_floor_build() {
 
 namespace {
 void cpuid_regs(unsigned leaf, unsigned sub, unsigned r[4]) {
-#if defined(_MSC_VER)
+#if !STRATA_CPU_X86
+    (void) leaf; (void) sub;
+    r[0] = r[1] = r[2] = r[3] = 0;
+#elif defined(_MSC_VER)
     int x[4];
     __cpuidex(x, (int) leaf, (int) sub);
     for (int i = 0; i < 4; ++i) r[i] = (unsigned) x[i];
@@ -273,6 +297,9 @@ bool cpu_avxvnni_ok() {
 }
 
 std::string cpu_name() {
+#if !STRATA_CPU_X86
+    return "ARM64";
+#else
     unsigned r[12] = {};
 #if defined(_MSC_VER)
     int x[4];
@@ -293,6 +320,7 @@ std::string cpu_name() {
     std::string name(s);
     const size_t b0 = name.find_first_not_of(' '), b1 = name.find_last_not_of(' ');
     return b0 == std::string::npos ? std::string("unknown") : name.substr(b0, b1 - b0 + 1);
+#endif
 }
 
 // ---- the AVX-512 probe and the oracle flag (#795) ----
@@ -320,6 +348,9 @@ const char* CpuFeatures::reason() const {
 }
 
 CpuFeatures cpu_features() {
+#if !STRATA_CPU_X86
+    return {};
+#else
     CpuFeatures f;
     int reg[4] = {0, 0, 0, 0};
 #if defined(_MSC_VER)
@@ -340,6 +371,7 @@ CpuFeatures cpu_features() {
     f.avx512_vnni = (ecx >> 11) & 1u;
     f.avx512_vbmi = (ecx >> 1) & 1u;
     return f;
+#endif
 }
 
 void cpu_require_expert_support() {
@@ -355,22 +387,34 @@ void cpu_require_expert_support() {
 
 void q2_rows_any(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt, float* const* out,
                  int r0, int r1) {
+#if !STRATA_CPU_X86
+    q2_0_gguf_rows_multi(w, row_bytes, nblocks, a, nt, out, r0, r1);
+#else
     if (cpu_avx512_ok()) q2_0_gguf_rows_multi(w, row_bytes, nblocks, a, nt, out, r0, r1);
     else if (cpu_avx2_ok()) q2_0_gguf_rows_multi_avx2(w, row_bytes, nblocks, a, nt, out, r0, r1);
     else q2_0_gguf_rows_multi_avx1(w, row_bytes, nblocks, a, nt, out, r0, r1);   // issue #1699: the third rung
+#endif
 }
 
 void q2_rows_any_legacy(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt, float* const* out,
                         int r0, int r1) {
+#if !STRATA_CPU_X86
+    q2_0_gguf_rows_multi(w, row_bytes, nblocks, a, nt, out, r0, r1);
+#else
     if (cpu_avx512_ok()) q2_0_gguf_rows_multi(w, row_bytes, nblocks, a, nt, out, r0, r1);
     else if (cpu_avx2_ok()) q2_0_gguf_rows_multi_avx2_legacy(w, row_bytes, nblocks, a, nt, out, r0, r1);
     else q2_0_gguf_rows_multi_avx1_legacy(w, row_bytes, nblocks, a, nt, out, r0, r1);
+#endif
 }
 
 void act_quant_any(const float* x, int n, ActQ& a) {
+#if !STRATA_CPU_X86
+    act_quant_q8_1(x, n, a);
+#else
     if (cpu_avx512_ok()) act_quant_q8_1(x, n, a);
     else if (cpu_avx2_ok()) act_quant_q8_1_avx2(x, n, a);
     else act_quant_q8_1_avx1(x, n, a);   // issue #1699
+#endif
 }
 
 #if !defined(STRATA_NATIVE_EXPERTS)

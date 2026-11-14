@@ -1,0 +1,269 @@
+{
+  "date": "2026-11-14",
+  "scope": "Delta DeepSeek V4.1 Flash on Windows ARM64 RTX Spark, 96 GiB GPU / 32 GiB host split",
+  "status": "Review and targeted remediation complete; unresolved findings are listed, not suppressed.",
+  "llama": {
+    "pin": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+    "upstream_reviewed": "32bdc3a89e6528d3e419024c833c5dabf32c7541",
+    "commits_behind": 1315,
+    "published_advisories": {
+      "count": 13,
+      "fixed_ref_ancestry": [
+        {
+          "ghsa": "GHSA-3p4r-fq3f-q74v",
+          "patched_ref": "b8146",
+          "sha": "418dea39cea85d3496c8b04a118c3b17f3940ad8",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-96jg-mvhq-q7q7",
+          "patched_ref": "b7824",
+          "sha": "4e5b83b226919c146fbfa754641a6772bcb2d722",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-8947-pfff-2f3c",
+          "patched_ref": "c78fb90",
+          "sha": "c78fb909b23758f5e418cf98a69bc8a0ef142fb8",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-vgg9-87g3-85w8",
+          "patched_ref": "26a48ad",
+          "sha": "26a48ad699d50b6268900062661bd22f3e792579",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-7rxv-5jhh-j6xx",
+          "patched_ref": "b5721",
+          "sha": "dd6e6d0b6a4bbe3ebfc931d1eb14db2f2b1d70af",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-g4cc-763q-h9h6",
+          "patched_ref": "c33fe8b8",
+          "sha": "c33fe8b8c4427202706b1434e9fc8ab5752c9cac",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-8wwf-w4qm-gpqr",
+          "patched_ref": "b5662",
+          "sha": "fb85a288d72abbd5e5daa8de96e6f8bfa7b5ab46",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-wcr5-566p-9cwj",
+          "patched_ref": "b3561",
+          "sha": "b72942fac998672a79a1ae3c03b340f7e629980b",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-5vm9-p64x-gqw9",
+          "patched_ref": "b3561",
+          "sha": "b72942fac998672a79a1ae3c03b340f7e629980b",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-mqp6-7pv6-fqjf",
+          "patched_ref": "b3561",
+          "sha": "b72942fac998672a79a1ae3c03b340f7e629980b",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-49q7-2jmh-92fp",
+          "patched_ref": "b3427",
+          "sha": "07283b1a90e1320aae4762c7e03c879043910252",
+          "is_ancestor": true
+        },
+        {
+          "ghsa": "GHSA-p5mv-gjc5-mwqv",
+          "patched_ref": "b2740",
+          "sha": "d4a9afc1009f0da88d04b2c5f672d81d5ae94675",
+          "is_ancestor": true
+        }
+      ],
+      "remaining_advisory": {
+        "id": "GHSA-j8rj-fmpv-wcxw",
+        "status": "RPC backend disabled: GGML_RPC:BOOL=OFF in active build; no claim of RPC source remediation"
+      }
+    },
+    "backports": [
+      {
+        "commit": "a6ea155d3d38b3f6f43d0c0dc29c2d592413ef44",
+        "change": "Reject GGUF tensor byte counts that overflow during alignment padding"
+      },
+      {
+        "commit": "2149c00f4442dc59302e134a02e4c99d5f7ed9fc",
+        "change": "Check tensor element multiplication before overflow in GGUF and ggml tensor creation"
+      }
+    ],
+    "persistence": "tools/xolotl/ggml/xolotl-ggml.patch; verified via an isolated git index against the pinned tree and compared with the patched working tree"
+  },
+  "remediation": {
+    "qdc_helper": {
+      "certifi": "2026.10.23",
+      "idna": "3.20",
+      "pytest": "9.0.3",
+      "urllib3": "2.8.0"
+    },
+    "mtmd_helper": {
+      "pillow": "13.0.0",
+      "torch": "2.13.0",
+      "torchvision": "0.28.0",
+      "transformers": "5.23.0",
+      "protobuf": "6.33.6"
+    },
+    "python310": "Removed vulnerable Pillow 12.3.0 fallback. Existing installations need Python upgrade/reinstallation; no automatic uninstall was performed.",
+    "http": "Shared response handler now sets X-Content-Type-Options: nosniff and reports Server: Strata instead of Python version."
+  },
+  "validation": {
+    "build": "Native ARM64 CUDA build of ds41_generate and test_gguf_security passed; no CUDA kernel change; HIP/SYCL not built here",
+    "gguf_regression": "5/5 passed: small, zero-sized, padded-byte overflow, element wrap-to-zero, element count beyond INT64_MAX",
+    "python_tests": "11 tests passed (headers, TCP_NODELAY, phone setup, DS41 local sizing)",
+    "inference": "Real rebuilt DS41 engine: two HTTP 200 responses with correct 323 and 1000 outputs; no speed benchmark claim",
+    "helper_resolution": "QDC and mtmd dependency resolution succeeded for Windows x64 Python 3.11; 26 and 48 resolved packages respectively; zero Trivy findings",
+    "helper_conversion": "Isolated x64 CPU environment, torch 2.13.0+cpu / torchvision 0.28.0+cpu / Transformers 5.23.0: generated a tiny CLIP vision model, converted it to GGUF and reopened 23 tensors; no model download; other legacy model families not tested",
+    "patch": "Canonical patch cleanly reapplies to the pin and reproduces vendor changes. git diff --check passed."
+  },
+  "scans": {
+    "trivy": {
+      "version": "0.76.2",
+      "original_repository_without_dev": {
+        "Vulnerabilities": 53,
+        "Misconfigurations": 66,
+        "Secrets": 0
+      },
+      "final_repository_including_dev": {
+        "Vulnerabilities": 101,
+        "Misconfigurations": 66,
+        "Secrets": 0
+      },
+      "final_installed_python": {
+        "Vulnerabilities": 0,
+        "Misconfigurations": 0,
+        "Secrets": 0,
+        "packages": 48
+      },
+      "final_helpers_resolved": {
+        "Vulnerabilities": 0,
+        "Misconfigurations": 0,
+        "Secrets": 0
+      }
+    },
+    "depscan": {
+      "version": "6.3.2",
+      "database": "Application-only, 2-year advisory window; not an all-history database",
+      "original_manifest_findings": 53,
+      "final_finding_instances": 102,
+      "final_unique_advisories": 91,
+      "validation": "Discarded initial empty-database result after a known-vulnerable urllib3 positive control failed; downloaded a fresh application database which reproduced original findings"
+    },
+    "zap": {
+      "version": "2.17.0",
+      "mode": "Passive only; safe mode, -silent -notel; 29 GET responses plus synthetic chat",
+      "before_alert_instances": 59,
+      "after_alert_instances": 14,
+      "after_counts": {
+        "Low: Timestamp Disclosure - Unix": 5,
+        "Medium: CSP: Failure to Define Directive with No Fallback": 1,
+        "Medium: CSP: Wildcard Directive": 1,
+        "Medium: CSP: script-src unsafe-inline": 1,
+        "Medium: CSP: style-src unsafe-inline": 1,
+        "Informational: Information Disclosure - Suspicious Comments": 5
+      },
+      "scope": "First pass used actual DS41 engine; header-remediation pass used the real HTTP handler with mock inference; no active attack scan"
+    },
+    "bandit": {
+      "version": "1.9.4",
+      "scope": "serve and tools/v41/serve Python sources; manual review of production findings",
+      "triage": "shell=True is the explicitly configured before_load hook; URL calls belong to model downloads, configured helper services, MCP, and requested web/image fetches. Network binding findings include deliberate LAN support. Not a proof of absence of malicious code."
+    },
+    "dependency_check": {
+      "version": "13.0.0",
+      "status": "blocked",
+      "reason": "NVD API rejected request without a usable API key; database unavailable. User explicitly requested leaving this scan blocked."
+    }
+  },
+  "network": {
+    "static_review": "No covert reporting identified in reviewed launch/server/network paths. HF telemetry disabled by launcher. serve/telemetry.py samples local hardware. Web search and MCP absent from active config.",
+    "runtime": "No external TCP/UDP connections observed during real engine startup, two chats and 15 s idle. Python audit hooks confirmed active in 6 subprocesses; no Python connect/DNS/urllib events were recorded. Native process-tree connections sampled every 0.2 s with no sampler errors.",
+    "limits": [
+      "Native calls shorter than sample interval can be missed",
+      "No browser process was executed: UI assets inspected and fetched through ZAP",
+      "No image encoder first-use, model download, optional web/MCP or extended idle test",
+      "Compiled dependency internals were not exhaustively audited"
+    ]
+  },
+  "unresolved": [
+    {
+      "area": "Bundled llama.cpp UI development toolchain",
+      "status": "Outside active Delta runtime; not installed or built by this scan",
+      "trivy_instances": 101,
+      "severities": {
+        "CRITICAL": 4,
+        "HIGH": 34,
+        "MEDIUM": 49,
+        "LOW": 14
+      },
+      "location": "third_party/llama.cpp/tools/ui/package-lock.json",
+      "action": "Upgrade and validate upstream Svelte UI separately before building or running it; not automatically fixed by the Python helper changes"
+    },
+    {
+      "area": "Container configurations",
+      "instances": 66,
+      "status": "Dockerfiles and samples, outside active Windows runtime; no container deployment was hardened"
+    },
+    {
+      "area": "CSP",
+      "instances": 4,
+      "severity": "Medium",
+      "status": "Current frame-ancestors policy is not a full CSP. Script/style policy tightening requires UI compatibility work; left visible."
+    },
+    {
+      "area": "Custom native wheel",
+      "status": "pip-audit cannot map torch 2.14.0+cu134 to PyPI; Trivy version matching does not audit this binary"
+    },
+    {
+      "area": "Dependency-Check",
+      "status": "Blocked by NVD access; approved to remain blocked"
+    }
+  ],
+  "performance_review": [
+    {
+      "commit": "0fb8f157702702f33f4e018de8701b2569a1bc28",
+      "assessment": "Few-row MMQ for batches 2-24 may help Q5_K dense speculative verification. Large CUDA integration; not backported or benchmarked."
+    },
+    {
+      "commit": "2744e48d1e88d7416224e92bf58d4ffedda4a205",
+      "assessment": "Low-bit MMVQ candidate; verify kernel use and benchmark before changing default."
+    },
+    {
+      "commit": "5d7d4aec1603a3747e001c5065d11be7df4816b6",
+      "assessment": "Not selected: it improves the MMA indexer, while current --kv-fp4 MXFP4 keys explicitly use the vector indexer."
+    },
+    {
+      "commit": "fc9ce6b9d52a8504edcb262abc92737c2289f96c",
+      "assessment": "Newer CUDA MMQ bounds hardening is a separate integration candidate; not included in the two generic GGUF backports."
+    }
+  ],
+  "artifacts": [
+    "logs/security-final/",
+    "logs/trivy-helpers-resolved.json",
+    "logs/security-runtime-test/",
+    "logs/security-web-final/",
+    "logs/mtmd-candidate-conversion.log",
+    "logs/security-tests.log",
+    "logs/build-security.log",
+    "logs/bandit-server.json"
+  ],
+  "recheck": "tools/security/scan.ps1 -Trivy <verified trivy.exe>; downloads current public advisories and scans working tree plus installed Python. On-demand only; no GitHub notification or background task enabled.",
+  "sources": [
+    "https://github.com/ggml-org/llama.cpp/security/advisories",
+    "https://github.com/ggml-org/llama.cpp/commit/a6ea155d3d38b3f6f43d0c0dc29c2d592413ef44",
+    "https://github.com/ggml-org/llama.cpp/commit/2149c00f4442dc59302e134a02e4c99d5f7ed9fc",
+    "https://pytorch.org/get-started/previous-versions/",
+    "https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html",
+    "https://trivy.dev/docs/latest/target/filesystem/",
+    "https://www.zaproxy.org/docs/desktop/addons/call-home/"
+  ]
+}

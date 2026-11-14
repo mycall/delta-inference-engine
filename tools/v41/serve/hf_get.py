@@ -5,10 +5,9 @@
       The same arguments as "hf download".  On top of it:
         * the PC stays awake while it runs (SetThreadExecutionState, as the server's prevent_sleep; the display may
           still turn off; closing a laptop lid or pressing the power button still sleeps it);
-        * one progress line for the whole download: "142.0 of 365.7 GB (39%) - 45 MB/s - about 1 h 20 min left";
-        * a download that stops moving (no new bytes on disk for DS41_STALL_MIN minutes, default 10) is ended and
-          started again - it resumes where it was; from the second problem on it runs without Hugging Face's Xet
-          transfer (HF_HUB_DISABLE_XET=1), the usual cure for Xet stalls;
+        * Hugging Face's live transfer progress in a terminal; periodic disk progress in redirected output;
+        * a running download is left alone: Xet can receive data without growing files on disk;
+          disk sizes are not a reliable stall detector (DS41_STALL_MIN is no longer used);
         * a failed run is tried again after a pause (15 s, 30 s, 1, 2, 5 min) instead of stopping the setup;
         * "finished" with files still missing (it happens with Xet) counts as a failure and is tried again;
         * a Windows notification when a long download stops for good (DS41_NO_TOAST=1: none).
@@ -29,7 +28,7 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")   # no usage reports to H
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 GB = 1e9
 BACKOFF_S = (15, 30, 60, 120, 300)          # between failed runs; after the last one the download gives up
-XET_OFF_AFTER = 2                           # problems (stalls or failures) before Xet is switched off
+XET_OFF_AFTER = 2                           # failed runs before Xet is switched off
 
 
 # ------------------------------------------------------------------------------------------------ keep awake, notify
@@ -174,13 +173,6 @@ def _tree_bytes(folder: str, suffix: str = "", limit: int = 200000) -> int:
     return total
 
 
-def xet_cache_dir() -> str:
-    if os.environ.get("HF_XET_CACHE"):
-        return os.environ["HF_XET_CACHE"]
-    home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
-    return os.path.join(home, "xet")
-
-
 def done_bytes(local_dir: str, files) -> int:
     """the planned files' bytes already in place, plus the unfinished downloads (.incomplete) in the folder"""
     part = _tree_bytes(os.path.join(local_dir, ".cache", "huggingface", "download"), ".incomplete")
@@ -260,26 +252,27 @@ def _kill(proc: subprocess.Popen):
 
 def run(args: list[str], hf_cmd: list[str] | None = None, stall_s: float | None = None, poll_s: float = 2.0,
         backoff=BACKOFF_S, api=None, out=None, toast_after_s: float = 120.0, label: str | None = None) -> int:
-    """hf download ARGS, watched (see the module's docstring).  -> 0, or the last exit code"""
+    """hf download ARGS, watched (see the module's docstring).  -> 0, or the last exit code.
+
+    stall_s is accepted for caller compatibility but ignored: disk growth cannot establish transfer inactivity.
+    """
     out = out or sys.stdout
     p = parse(args)
     local_dir = p["local_dir"] or "."
-    if stall_s is None:
-        try:
-            stall_s = float(os.environ.get("DS41_STALL_MIN", "10")) * 60
-        except ValueError:
-            stall_s = 600.0
     files = plan(p, api)
     total = sum(n for _, n in files) if files else None
     what = label or (p["files"][0] if len(p["files"]) == 1 else p["repo"] or "the files")
     tty = hasattr(out, "isatty") and out.isatty()
+    native_progress = tty and os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS", "").upper() not in {"1", "ON", "YES", "TRUE"}
     xet_off = os.environ.get("HF_HUB_DISABLE_XET") == "1"
     problems, failures, rc = 0, 0, 1
     t_start = time.time()
     awake = keep_awake()
+    proc = None
     try:
         while True:
-            env = {**os.environ, "HF_HUB_DISABLE_TELEMETRY": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1"}
+            env = {**os.environ, "HF_HUB_DISABLE_TELEMETRY": "1",
+                   "HF_HUB_DISABLE_PROGRESS_BARS": "0" if native_progress else "1"}
             if xet_off:
                 env["HF_HUB_DISABLE_XET"] = "1"
             if total:
@@ -287,44 +280,31 @@ def run(args: list[str], hf_cmd: list[str] | None = None, stall_s: float | None 
                       "again and it goes on where it was.", file=out, flush=True)
             else:
                 print(f"Downloading {what} - the PC stays awake meanwhile.", file=out, flush=True)
-            proc = subprocess.Popen((hf_cmd or hf_command()) + ["download", *args], env=env, stdout=subprocess.DEVNULL)
+            # Let this wrapper handle Ctrl+C and stop the whole downloader tree. Otherwise a Windows console
+            # launcher can exit first, leaving its Python children alive with the download locks held.
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            proc = subprocess.Popen((hf_cmd or hf_command()) + ["download", *args], env=env,
+                                    stdout=subprocess.DEVNULL, creationflags=flags)
             rate = Rate()
-            last_n, last_change, last_line, shown = None, time.time(), 0.0, ""
-            xet_n, xet_at = 0, 0.0
-            stalled = False
+            last_line, shown = 0.0, ""
             while proc.poll() is None:
                 time.sleep(poll_s)
                 now = time.time()
                 n = done_bytes(local_dir, files)
-                if not xet_off and now - xet_at >= 30:   # Xet's chunk cache moves too (looked at less often)
-                    xet_n, xet_at = _tree_bytes(xet_cache_dir(), limit=50000), now
-                n_act = n + (0 if xet_off else xet_n)
-                if n_act != last_n:
-                    last_n, last_change = n_act, now
                 r = rate.add(now, n)
-                if tty:
+                # Xet reports network transfer separately from file reconstruction. Its own bars can show
+                # activity while file sizes stay unchanged; polling disk sizes cannot measure that traffic.
+                if tty and not native_progress:
                     shown = progress_line(n, total, r)
+                    shown += " (disk)"
                     out.write("\r  " + shown.ljust(78)[:96])
                     out.flush()
-                elif now - last_line >= 60:
+                elif not native_progress and now - last_line >= 60:
                     last_line = now
-                    print("  " + progress_line(n, total, r), file=out, flush=True)
-                if now - last_change >= stall_s:
-                    stalled = True
-                    break
+                    print("  " + progress_line(n, total, r) + " (disk)", file=out, flush=True)
             if tty and shown:
                 out.write("\n")
                 out.flush()
-            if stalled:
-                _kill(proc)
-                problems += 1
-                print(f"The download has not moved for {duration(stall_s)}: starting it again (it resumes).",
-                      file=out, flush=True)
-                if problems >= XET_OFF_AFTER and not xet_off:
-                    xet_off = True
-                    print("  From now on without Hugging Face's Xet transfer (HF_HUB_DISABLE_XET=1).", file=out,
-                          flush=True)
-                continue
             rc = proc.returncode
             gone = missing(local_dir, files)
             if rc == 0 and not gone:
@@ -349,7 +329,11 @@ def run(args: list[str], hf_cmd: list[str] | None = None, stall_s: float | None 
                   f"(try {failures + 1} of {len(backoff) + 1}) ...", file=out, flush=True)
             time.sleep(wait)
     finally:
-        awake.close()
+        try:
+            if proc is not None and proc.poll() is None:
+                _kill(proc)
+        finally:
+            awake.close()
 
 
 def main(argv: list[str]) -> int:

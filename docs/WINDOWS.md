@@ -54,6 +54,95 @@ build-win.bat
 - It runs 6 parallel jobs by default; set `JOBS` to change that. Full parallel nvcc can exhaust RAM.
 - Output: `build-win\ds41_generate.exe`.
 
+### Windows on ARM64 (RTX Spark)
+
+`build-ds41.bat` detects native Windows ARM64, including an x64 shell running under
+emulation, and builds into `build-ds41-arm64`. This path enables the experimental
+`STRATA_ARM64` CMake option. The x86 portable and compatibility builds cannot be used
+with the ARM64 CUDA libraries.
+
+The native build needs Visual Studio's ARM64 C++ tools, its ARM64 Clang tools, CMake
+with Windows ARM64 CUDA support, and the ARM64 CUDA Toolkit (13.4 or newer). The
+toolkit must contain `lib/arm64/cudadevrt.lib`; adding that directory to an x64
+linker's search path does not fix an architecture mismatch. NVIDIA documents the
+[ARM64 compiler and CUDA environment](https://docs.nvidia.com/rtx-spark/rtx-spark-porting-guide/latest/porting/build.html).
+
+The build uses clang-cl for C/C++, nvcc with the ARM64 MSVC host compiler for CUDA,
+and `121a` for the RTX Spark N1X GPU. CPU expert formats handled by ggml use its ARM
+NEON kernels. Strata's Q2_0 rows use NEON integer dot products; the legacy activation
+scale and rounding rules are preserved. Floating-point row reductions can differ
+in the last bits from the x86 kernels. The ARM target requires ARMv8.2, FP16 and dot
+product instructions; this is not a build for every Windows ARM device. EXL3 CPU
+experts still require AVX2 and are not enabled by this port.
+
+`Start DeepSeek.bat` selects the native build and skips x86 release downloads on
+ARM64. The engine accepts CUDA devices classified as integrated GPUs, including
+RTX Spark, as well as discrete GPUs. Pictures setup also selects PyTorch for the Python interpreter's architecture.
+For Windows ARM64 Python 3.14, the upstream CPU index has no compatible wheel;
+setup uses NVIDIA's stable `torch==2.14.0+cu134` wheel (~1.9 GB) from its
+[Windows ARM64 package index](https://github.com/NVIDIA/pytorch-windows-ci#install-built-wheels).
+This CUDA-enabled package also runs CPU tensors: installing it does not change the
+pictures device setting. Windows ARM64 Python 3.13 keeps the upstream CPU package
+when pictures use the CPU. Setup resolves the replacement before removing an
+installed PyTorch and checks a tensor operation after installation.
+
+The engine tests need no model download:
+
+```bat
+python tools\v41\serve\test_cpu_level.py
+python tools\v41\serve\test_install_torch.py
+cmake --build build-ds41-arm64 --target arm64_cpu_test test_ds41_fq test_ds41_hcmix test_ds41_kvfp4
+build-ds41-arm64\arm64_cpu_test.exe
+build-ds41-arm64\test_ds41_fq.exe
+build-ds41-arm64\test_ds41_fq.exe --cuda
+build-ds41-arm64\test_ds41_hcmix.exe --cuda
+build-ds41-arm64\test_ds41_kvfp4.exe --cuda
+```
+
+This covers the DeepSeek build and launcher. The separate `setup.py` installers,
+HIP, SYCL and Metal builds are outside this Windows ARM64 CUDA path. No inference
+speed comparison against x86 is claimed.
+
+Validated on November 9, 2026, on Windows ARM64 with an RTX Spark N1X, CUDA 13.5.37,
+Clang 22.1.3 and MSVC 19.51.36260: the engine and all three helpers built, the NEON
+CPU tests and five launcher tests passed, and CUDA fake-quant, HC-mix and FP4-cache
+tests had no bitwise differences from their references. The x64 CPU library also
+built. The Unsloth UD-IQ2_XXS model loaded and returned a short chat response over
+the local API; a streamed tool call and usage reporting also passed. PyTorch
+2.14.0+cu134 passed CPU and CUDA tensor checks, and the downloaded vision encoder
+produced finite embeddings for a synthetic 224-by-224 image on the CPU. These are
+smoke tests, not quality or throughput benchmarks. HIP, SYCL and Metal were not
+built in this environment; those build checks remain required before review.
+
+On RTX Spark, CPU RAM and GPU allocations share physical memory. CUDA reports a
+combined dedicated/shared budget; `nvidia-smi` reports the dedicated carveout.
+Increasing that carveout leaves less memory for Windows and the expert arena.
+See [NVIDIA's Windows UMA memory guide](https://docs.nvidia.com/rtx-spark/rtx-spark-porting-guide/latest/uma/umacuda.html).
+The defaults measured on discrete GPUs can leave too little headroom here: on the
+102 GiB Windows RAM / 24 GiB dedicated GPU configuration, a 74 GiB arena, 0.6 GiB
+margin and 16,384-token batch encountered CUDA out-of-memory while regrowing the
+cache after a 10,372-token prompt.
+
+`DS41_PROMPT_BATCH` optionally overrides the prompt batch size, while retaining
+the model-specific safety caps. Together with `DS41_ARENA_GIB` and
+`DS41_VRAM_MARGIN`, it allows a smaller memory budget without changing the shipped
+defaults. Set these in `ds41-paths.bat` or the launcher's environment, then restart
+`Start DeepSeek.bat`. Smaller batches can slow prompt processing. The margin is
+memory excluded from the GPU cache budget; it does not change the GPU carveout.
+
+On that RTX Spark with Unsloth UD-IQ2_XXS, the following opt-in settings passed four
+synthetic chat requests (short, 10,464 tokens, short, 10,465 tokens) without a CUDA
+out-of-memory error or watchdog stall on November 9, 2026. Available Windows RAM,
+sampled once per second, stayed at or above 6.6 GiB. The two long requests took
+95.0 and 87.7 seconds including their answers; this is a stability smoke test,
+not a throughput comparison or a guarantee for larger contexts or concurrent apps.
+
+```bat
+set "DS41_ARENA_GIB=64"
+set "DS41_VRAM_MARGIN=16"
+set "DS41_PROMPT_BATCH=2048"
+```
+
 ## 3. Model files
 
 `tools/xolotl/win_fetch_files.py` downloads named files from a Hugging Face repo with curl. It resumes, checks every file against the LFS sha256, and needs no hf CLI. It puts files flat in the target folder, so the tokenizer files can sit next to the model.

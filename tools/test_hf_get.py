@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "v41" / "serve"))
@@ -33,10 +34,11 @@ FAKE = textwrap.dedent(r'''
         sys.exit(0)
     if mode == "ok":
         finish()
-    if mode == "stall" and calls < int(os.environ.get("FAKE_STALLS", "1")):
+    if mode == "buffered":
         with open(os.path.join(part, "abc.incomplete"), "wb") as f:
             f.write(b"x" * 10)
-        time.sleep(60)
+        # Like Xet: work continues without growing either the file or the on-disk cache.
+        time.sleep(3)
     if mode == "missing" and calls == 0:
         sys.exit(0)                           # "finished", nothing written
     if mode == "fail" and calls < int(os.environ.get("FAKE_FAILS", "1")):
@@ -63,6 +65,9 @@ class FakeApi:
 
 class HfGetTest(unittest.TestCase):
     def setUp(self):
+        env = patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = self.tmp.name
         self.fake = os.path.join(self.dir, "fake_hf.py")
@@ -92,12 +97,14 @@ class HfGetTest(unittest.TestCase):
         self.assertTrue(calls[0]["bars_off"])                 # our own progress line instead of hf's bars
         self.assertIn("(0.0 MB)", text)
 
-    def test_stall_restarts_then_xet_off(self):
-        rc, calls, text = self.run_fake("stall", FAKE_STALLS=2)
+    def test_buffered_transfer_is_not_restarted(self):
+        # The pause exceeds stall_s=1.5; the original watchdog killed this live transfer.
+        rc, calls, text = self.run_fake("buffered", DS41_STALL_MIN="0.001")
         self.assertEqual(rc, 0)
-        self.assertEqual([c["xet_off"] for c in calls], [False, False, True])
-        self.assertIn("has not moved", text)
-        self.assertIn("HF_HUB_DISABLE_XET=1", text)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(calls[0]["xet_off"])
+        self.assertNotIn("has not moved", text)
+        self.assertEqual(Path(self.models, "model.gguf").stat().st_size, 1000)
 
     def test_exit_0_with_files_missing_is_retried(self):
         rc, calls, text = self.run_fake("missing")
@@ -151,6 +158,64 @@ class PartsTest(unittest.TestCase):
         self.assertEqual(r.add(4, 400), 100)
         self.assertEqual(r.add(20, 2000), 2000 / 20)        # the window keeps two points at least
         self.assertAlmostEqual(r.add(30, 3000), (3000 - 2000) / 10)
+
+
+class DownloadCleanupTests(unittest.TestCase):
+    def run_download(self, proc, failure=None):
+        awake = Mock()
+        with patch.object(hf_get, "plan", return_value=None), \
+                patch.object(hf_get, "keep_awake", return_value=awake), \
+                patch.object(hf_get.subprocess, "Popen", return_value=proc) as launch, \
+                patch.object(hf_get.time, "sleep", side_effect=failure), \
+                patch.object(hf_get, "_kill") as kill:
+            if failure is not None:
+                with self.assertRaises(type(failure)):
+                    hf_get.run(["example/model"], hf_cmd=["hf"], out=io.StringIO())
+                kill.assert_called_once_with(proc)
+            else:
+                self.assertEqual(hf_get.run(["example/model"], hf_cmd=["hf"], out=io.StringIO()), 0)
+                kill.assert_not_called()
+            awake.close.assert_called_once()
+            expected = hf_get.subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            self.assertEqual(launch.call_args.kwargs["creationflags"], expected)
+
+    def test_interrupt_stops_downloader(self):
+        self.run_download(Mock(poll=Mock(return_value=None)), KeyboardInterrupt())
+
+    def test_monitor_error_stops_downloader(self):
+        self.run_download(Mock(poll=Mock(return_value=None)), OSError("monitor failed"))
+
+    def test_success_does_not_kill_finished_process(self):
+        self.run_download(Mock(poll=Mock(return_value=0), returncode=0))
+
+    def test_launch_error_releases_keepawake(self):
+        awake = Mock()
+        with patch.object(hf_get, "plan", return_value=None), \
+                patch.object(hf_get, "keep_awake", return_value=awake), \
+                patch.object(hf_get.subprocess, "Popen", side_effect=OSError("launch failed")), \
+                patch.object(hf_get, "_kill") as kill:
+            with self.assertRaises(OSError):
+                hf_get.run(["example/model"], hf_cmd=["hf"], out=io.StringIO())
+            awake.close.assert_called_once()
+            kill.assert_not_called()
+
+    def test_progress_uses_transfer_bars_in_terminal(self):
+        for terminal, disabled, native in [(True, "", True), (False, "", False), (True, "1", False)]:
+            with self.subTest(terminal=terminal, disabled=disabled):
+                out = io.StringIO()
+                out.isatty = lambda: terminal
+                proc = Mock(poll=Mock(side_effect=[None, 0, 0]), returncode=0)
+                with patch.dict(os.environ, {"HF_HUB_DISABLE_PROGRESS_BARS": disabled}), \
+                        patch.object(hf_get, "plan", return_value=None), \
+                        patch.object(hf_get, "keep_awake", return_value=Mock()), \
+                        patch.object(hf_get.subprocess, "Popen", return_value=proc) as launch, \
+                        patch.object(hf_get.time, "sleep"), \
+                        patch.object(hf_get, "done_bytes", return_value=400_000_000):
+                    self.assertEqual(hf_get.run(["example/model"], hf_cmd=["hf"], out=out), 0)
+                env = launch.call_args.kwargs["env"]
+                self.assertEqual(env["HF_HUB_DISABLE_PROGRESS_BARS"], "0" if native else "1")
+                # Do not overwrite the live transfer bars with a misleading disk-only speed.
+                self.assertEqual("(disk)" in out.getvalue(), not native)
 
 
 if __name__ == "__main__":
