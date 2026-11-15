@@ -95,3 +95,6 @@ models/
 /vision-choice.txt
 /voice-choice.txt
 /delta-settings.json
+
+# Local upstream-review archives; preserve without publishing.
+/pr-zips/

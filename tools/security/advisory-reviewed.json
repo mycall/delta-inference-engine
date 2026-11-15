@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "review": "tools/security/review-2026-11-14.json",
+  "scope": "Exact published advisory content reviewed against recorded pin/backports; RPC advisory disposition requires GGML_RPC=OFF. This does not approve other builds or future advisory changes.",
+  "fingerprints": {
+    "GHSA-3p4r-fq3f-q74v": "f21339ed9463debedfcf6f1cfcdf18d680122f897054fdf66632dcd29d8eccc4",
+    "GHSA-j8rj-fmpv-wcxw": "dece6927ee3b9d0762ab4f47f5833f9ba9113df64597ca02f4638ed3e3aea216",
+    "GHSA-96jg-mvhq-q7q7": "de2e60b8b1aa3a80b957a0a2b253fe61f5a6fc67cea229726e2050a6618348d7",
+    "GHSA-8947-pfff-2f3c": "c1bbce8cbccc871d5d3040095f748a54e49fd37ee1e13a9c75815e005570b0f4",
+    "GHSA-vgg9-87g3-85w8": "b866196a50ad4325b2ae4320f4c43393fcc7ffa2c77b1705f02fa40230cf3190",
+    "GHSA-7rxv-5jhh-j6xx": "b2468431ea3bda9c8ec7bf1f20f9fac9a414e6a67e1ccd96099e7f54c957e971",
+    "GHSA-g4cc-763q-h9h6": "582faa0a04dcf3f196feeda7ec3125bffd380ef7fd732b781c3c08b1c74699ed",
+    "GHSA-8wwf-w4qm-gpqr": "7e51055a7bc703ca1506061f9f1b4cf200604dfbebe7ee18473377b0e4560f7b",
+    "GHSA-wcr5-566p-9cwj": "abc14bc80bc8c101a860035b8da661aa5d7b76e4f99b568285aafe7844f73a30",
+    "GHSA-5vm9-p64x-gqw9": "f34407b84668694fd79b87f5c1973fd8c7668015a18e669f050cb0e055315f3f",
+    "GHSA-mqp6-7pv6-fqjf": "cad54e78e4b8eac8787679a9ed5a9d15eeb33d4af4783040006760dbf0eea6e0",
+    "GHSA-49q7-2jmh-92fp": "017af314dcb5e077ebe05d4b43d9cd3e88e2c5958560ea26a479d0a6e15d006a",
+    "GHSA-p5mv-gjc5-mwqv": "6715aff406319faf9156c79dd9350708cad20db2472a0a01224b065425538269"
+  }
+}

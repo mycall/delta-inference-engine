@@ -151,7 +151,9 @@ set STRATA_SERVE_KEEP_MAX=12000
 set "OPENPAGE=--open"
 :serve
 rem this PC's copy of the config: paths filled in, the RAM arena sized (tools\v41\serve\local\, not in git)
-".venv\Scripts\python.exe" tools\v41\serve\ds41_local.py tools\v41\serve\ds41-windows.json tools\v41\serve\local\ds41-windows.json
+set "DS41_CONFIG_INPUT=tools\v41\serve\ds41-windows.json"
+if defined DS41_CONFIG_TEMPLATE set "DS41_CONFIG_INPUT=%DS41_CONFIG_TEMPLATE%"
+".venv\Scripts\python.exe" tools\v41\serve\ds41_local.py "%DS41_CONFIG_INPUT%" tools\v41\serve\local\ds41-windows.json
 if not errorlevel 1 goto configured
 rem the page's last change cannot start: back to the model that did
 ".venv\Scripts\python.exe" tools\v41\serve\setup_panel.py --rollback

@@ -2172,6 +2172,10 @@ class StrataEngine:
                             "the end of the engine log to github.com/Niko1221/Strata/issues/481.")
         self.ended = True                               # not alive from now: the next request restarts it
         proc = self.proc
+        # The client-facing explanation has no clock time. Keep a local event
+        # marker so a future reported exit can be matched to this exact cause.
+        print(f"[strata] engine lifecycle {time.strftime('%Y-%m-%dT%H:%M:%S%z')} "
+              f"pid={proc.pid} action=server-end-after-silence", flush=True)
         try:
             proc.kill()
             proc.wait(timeout=20)                       # restart() -> close() handles one that is still exiting

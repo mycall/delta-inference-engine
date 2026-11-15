@@ -59,6 +59,24 @@ package versions. Install Trivy from its official release and verify the checksu
 telemetry and writes reports under the ignored `logs/` directory; secret findings can contain sensitive text, so do
 not publish raw reports. This is an on-demand check, not a background notification service.
 
+`tools/security/install-advisory-monitor.ps1` installs the current user's
+`Delta-Llama-Published-Advisories` Windows task, daily at 09:00 while that user
+is logged on, with a missed run started when available. It runs without elevated
+rights and writes public advisory snapshots, changes and pending review items to
+`logs/advisory-monitor/`; `latest.json` is the last successful result. It fetches
+only published llama.cpp advisories from GitHub, uploads no source, and performs
+no patches or model/process recovery. Run the installer with `-Remove` to remove
+the task. Polling failures retain the last successful snapshot and write a dated
+error report. An unchanged later poll does not clear pending review items.
+
+The local 2026-11-14 scheduled test exited 0 and observed 13 advisories. Its
+second poll found no changes. All 13 records exactly matched the saved advisory
+snapshot used by the dated source/patch review, and the local pin and disabled
+RPC build were rechecked. `tools/security/advisory-reviewed.json` records those
+exact content hashes; a later advisory update becomes pending again. These
+acknowledgements describe the reviewed build and dispositions, including the RPC
+exclusion, rather than declaring every build safe.
+
 The [2026-11-14 local review](tools/security/review-2026-11-14.json) records the tested RTX Spark build, patches,
 findings and limits. Native sources need their own advisory and patch review: a clean package scan does not cover
 the custom ARM64 PyTorch wheel or prove the C++ engine safe. ZAP's passive scan checks web responses; outbound-code

@@ -1,0 +1,150 @@
+diff --git a/tools/v41/engine/ds41_moe.cpp b/tools/v41/engine/ds41_moe.cpp
+index 683c6bc9..d3b48b39 100644
+--- a/tools/v41/engine/ds41_moe.cpp
++++ b/tools/v41/engine/ds41_moe.cpp
+@@ -5068,10 +5068,33 @@ bool gpu_run_chunk(Ds41MoeImpl& im, int64_t layer, int n, const int32_t* ids, co
+         ck(cudaMalloc(&gp.c_ptr, sizeof(unsigned long long) * (size_t) ng), "c_ptr");
+         ck(cudaMalloc(&gp.c_start, sizeof(int32_t) * (size_t) (ng + 1)), "c_start");
+         ck(cudaMalloc(&gp.c_ng, sizeof(int32_t)), "c_ng");
++        // A free-memory snapshot can overstate what WDDM will commit after
++        // another process grows. Both halves must fit; a smaller wave streams
++        // the same expert blobs in more passes. Never go below one blob.
++        const int64_t stage_floor = im.cfg.chunk_prestage
++            ? im.g.n_experts * (im.blob + 1048576)
++            : std::max<int64_t>(im.blob, 16LL << 20);
++        for (;;) {
++            cudaError_t allocation_error = cudaMalloc(&gp.c_stage[0], (size_t) gp.c_half + 1048576);
++            if (allocation_error == cudaSuccess)
++                allocation_error = cudaMalloc(&gp.c_stage[1], (size_t) gp.c_half + 1048576);
++            if (allocation_error == cudaSuccess) break;
++            (void) cudaGetLastError();
++            for (void*& stage : gp.c_stage) {
++                if (stage) cudaFree(stage);
++                stage = nullptr;
++            }
++            if (allocation_error != cudaErrorMemoryAllocation || gp.c_half <= stage_floor)
++                ck(allocation_error, "c_stage");
++            const int64_t next = std::max<int64_t>(stage_floor, gp.c_half / 2);
++            std::fprintf(stderr, "ds4_moe: chunk stage reduced from %.0f to %.0f MiB after allocation failure\n",
++                         (double) gp.c_half / 1048576.0, (double) next / 1048576.0);
++            gp.c_half = next;
++            gp.c_bhalf = std::min<int64_t>(gp.c_bhalf, gp.c_half);
++        }
+         for (int h = 0; h < 2; ++h) {
+             // + 1 MiB: the MMQ slot stride rounds a blob up (<= ~0.3 MiB) and MMQ reads up to 4 KiB past a matrix;
+             // zeroed once, so whatever MMQ reads past a blob decodes to finite numbers (llama.cpp zero-pads too)
+-            ck(cudaMalloc(&gp.c_stage[h], (size_t) gp.c_half + 1048576), "c_stage");
+             ck(cudaMemset(gp.c_stage[h], 0, (size_t) gp.c_half + 1048576), "c_stage zero");
+             // The bounce halves are PINNED host memory, and the arena's pin already takes all but ~4 GiB of the GPU's
+             // shared-memory budget on Windows (WDDM): two 1 GiB halves can fail there ("c_bounce: out of memory" -
+@@ -5131,20 +5154,55 @@ bool gpu_run_chunk(Ds41MoeImpl& im, int64_t layer, int n, const int32_t* ids, co
+     if (use_mmq) {
+         SL = MP.SL;
+         const int64_t cap = std::max<int64_t>(16384, n);
+-        if (use_mmq && gp.m_rows < cap) {
++        if (gp.m_rows < n || gp.m_rows == 0) {
+             gp.free_mmq();
+-            gp.m_rows = cap;
+             const int64_t FF = GL.n_ff;
+-            ck(cudaMalloc(&gp.m_gu, (size_t) cap * (size_t) (2 * FF) * 4), "m_gu");
+-            ck(cudaMalloc(&gp.m_h, (size_t) cap * (size_t) FF * 4), "m_h");
+-            ck(cudaMalloc(&gp.m_xg, mmq::q8_bytes(cap, H)), "m_xg");
+-            ck(cudaMalloc(&gp.m_xu, mmq::q8_bytes(cap, H)), "m_xu");
+-            ck(cudaMalloc(&gp.m_xd, mmq::q8_bytes(cap, FF)), "m_xd");
+-            ck(cudaMalloc(&gp.m_bnd, sizeof(int32_t) * (size_t) (im.g.n_experts + 1)), "m_bnd");
+-            ck(cudaMalloc(&gp.m_iota, sizeof(int32_t) * (size_t) (cap + 128)), "m_iota");   // + MMQ's id over-read (see c_dst)
+-            mmq::iota((int32_t*) gp.m_iota, cap + 128, gp.s);
+-            ds41_heapcheck("chunk:mmq-bufs", n);
+-            if (!gp.m_ctx) gp.m_ctx = new mmq::Context();   // never deleted (see Gpu::m_ctx)
++            int64_t rows = cap;
++            for (;;) {
++                // A 16K-row warm allocation improves grouping but can exhaust
++                // Spark VRAM after the dense half grows. Each MMQ sub-run is
++                // already bounded by m_rows, so a smaller arena is equivalent.
++                cudaError_t allocation_error = cudaSuccess;
++                auto alloc = [&](void*& ptr, size_t bytes) {
++                    allocation_error = cudaMalloc(&ptr, bytes);
++                    return allocation_error == cudaSuccess;
++                };
++                const bool ready =
++                    alloc(gp.m_gu, (size_t) rows * (size_t) (2 * FF) * 4) &&
++                    alloc(gp.m_h, (size_t) rows * (size_t) FF * 4) &&
++                    alloc(gp.m_xg, mmq::q8_bytes(rows, H)) &&
++                    alloc(gp.m_xu, mmq::q8_bytes(rows, H)) &&
++                    alloc(gp.m_xd, mmq::q8_bytes(rows, FF)) &&
++                    alloc(gp.m_bnd, sizeof(int32_t) * (size_t) (im.g.n_experts + 1)) &&
++                    alloc(gp.m_iota, sizeof(int32_t) * (size_t) (rows + 128)); // MMQ id over-read
++                if (ready) {
++                    gp.m_rows = rows;
++                    mmq::iota((int32_t*) gp.m_iota, rows + 128, gp.s);
++                    break;
++                }
++                (void) cudaGetLastError();
++                gp.free_mmq();
++                if (allocation_error != cudaErrorMemoryAllocation)
++                    ck(allocation_error, "MMQ scratch allocation");
++                if (rows <= n) {
++                    // The existing grouped MMVQ path needs no MMQ scratch.
++                    // Retire MMQ for this class to avoid retrying every chunk.
++                    use_mmq = false;
++                    SL = BL;
++                    gp.m_ok[(size_t) CI] = 0;
++                    std::fprintf(stderr, "ds4_moe: MMQ scratch unavailable at %lld rows; using MMVQ for this class\n",
++                                 (long long) rows);
++                    break;
++                }
++                const int64_t next = std::max<int64_t>(n, rows / 2);
++                std::fprintf(stderr, "ds4_moe: MMQ scratch reduced from %lld to %lld rows after allocation failure\n",
++                             (long long) rows, (long long) next);
++                rows = next;
++            }
++            if (use_mmq) {
++                ds41_heapcheck("chunk:mmq-bufs", n);
++                if (!gp.m_ctx) gp.m_ctx = new mmq::Context(); // never deleted (see Gpu::m_ctx)
++            }
+         }
+     }
+ #endif
+diff --git a/tools/v41/engine/test_ds41_moe.cpp b/tools/v41/engine/test_ds41_moe.cpp
+index 86317d6e..937837ad 100644
+--- a/tools/v41/engine/test_ds41_moe.cpp
++++ b/tools/v41/engine/test_ds41_moe.cpp
+@@ -69,12 +69,13 @@ double rel(const std::vector<float> & a, const std::vector<float> & b) {
+ }  // namespace
+ 
+ int main(int argc, char ** argv) {
+-    if (argc < 2) { std::fprintf(stderr, "usage: test_ds41_moe <file.gguf> [--layers 0,1] [--tokens 8] [--gpu] [--chunk N] [--chunk-mmq]\n"); return 2; }
++    if (argc < 2) { std::fprintf(stderr, "usage: test_ds41_moe <file.gguf> [--layers 0,1] [--tokens 8] [--gpu] [--chunk N] [--chunk-mmq] [--arena-gib 0..4]\n"); return 2; }
+     std::string path = argv[1];
+     int nchunk = 0;   // --chunk N: also N tokens at once through run_chunk (the prompt path), each row vs the reference
+     std::vector<int> layers = { 0 };
+     int ntok = 8;
+     bool gpu = false, chunk_mmq = false;
++    double arena_gib = 4.0;
+     for (int i = 2; i < argc; ++i) {
+         const std::string a = argv[i];
+         if (a == "--layers" && i + 1 < argc) {
+@@ -86,6 +87,12 @@ int main(int argc, char ** argv) {
+         else if (a == "--gpu") gpu = true;
+         else if (a == "--chunk" && i + 1 < argc) nchunk = std::atoi(argv[++i]);
+         else if (a == "--chunk-mmq") chunk_mmq = true;   // the prompt path's MMQ (PTQ1_0 via its Q2_0 transcode)
++        else if (a == "--arena-gib" && i + 1 < argc) {
++            arena_gib = std::atof(argv[++i]);
++            if (!std::isfinite(arena_gib) || arena_gib < 0 || arena_gib > 4) {
++                std::fprintf(stderr, "arena-gib must be between 0 and 4\n"); return 2;
++            }
++        }
+     }
+     Ds41FileBlobs src(path);
+     std::string err;
+@@ -100,8 +107,8 @@ int main(int argc, char ** argv) {
+     cfg.chunk_mmq = chunk_mmq;
+     cfg.threads = 8;
+     cfg.slots = 64;              // a small cache: most picks miss -> CPU / PCIe paths run too
+-    cfg.arena_gib = 4.0;
+-    cfg.max_arena_gib = 4.0;
++    cfg.arena_gib = arena_gib;
++    cfg.max_arena_gib = arena_gib;
+     cfg.pcie_frac = 0.5;
+     cfg.pf_b = 0;
+     if (!tier.init(g, &src, cfg, err)) { std::fprintf(stderr, "tier init: %s\n", err.c_str()); return 1; }

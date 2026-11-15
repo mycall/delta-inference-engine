@@ -145,6 +145,49 @@ set "DS41_PROMPT_BATCH=2048"
 
 ## 3. Model files
 
+### Local RTX Spark N1X qualification profile
+
+`Start DeepSeek (RTX Spark tested).bat` selects an opt-in profile for the measured
+96-GiB dedicated GPU / 32-GiB host split. It requires the existing October-17
+Unsloth UD-IQ2_XXS shards and `V41-1017-MTP-iq2xxs-imx.gguf` in `DS41_MODELS`.
+It uses the original engine, an 8-GiB CPU arena, 24-GiB GPU reserve, 512-token
+prompt batch, 512-MiB staging and upload working-set trimming. CPU vision stays
+lazy; image requests were not benchmarked. The ordinary launcher stays unchanged
+unless the operator selects `DS41_CONFIG_TEMPLATE`.
+
+The JSON template is `tools/v41/serve/profiles/rtx-spark-n1x-tested.json`. It pins
+the recorded engine environment, including drafter depth 5 and expert counts
+96/64/32. `STRATA_ENC_BOUND=0` explicitly preserves the test runs' unbounded
+replay setting; the ordinary launcher sets 128. Routing biases remain 0.28/0.3
+and dense weights are requantized to q5_K, so this is not an exact-routing or
+full-precision accuracy claim. Model context allocation stays 1,048,576 tokens;
+long contexts at that limit have not been qualified.
+
+On November 14, 2026, with the user-configured 128-GiB initial / 160-GiB maximum
+Windows pagefile active, four sequential comparison runs completed 24 requests
+without engine replacement. Twenty sorting/loop contracts passed; four warm-ups
+returned a JSON object instead of the requested number. Original and allocation
+patch responses matched, with no meaningful speed advantage for the patch.
+Original long-prompt medians were 92.87/95.16 seconds on the approximately
+6.3K-token synthetic fixtures. Two actual contained OpenCode edit/export trials
+then passed cold and warm using the same original-engine process. These results
+cover a bounded workflow, not general accuracy or long-term stability.
+
+The prepared template was checked against the qualified config's engine arguments
+and recorded environment. Evidence is under
+`logs/allocation-ab-5a0fef29506e424faf3f63057d2c724c/`; deployment history is in the
+sibling integration repository's `history/2026-11-14-system-commit.md`. The reboot
+changed background workloads too, so those results do not isolate a pagefile
+speed improvement. This profile trades cache capacity and batch size for the
+headroom needed by that deployment; it is not claimed faster than every older
+configuration.
+
+The qualified original executable's SHA-256 is
+`8adace46da0058212abc28b7537d2f40a984512bfb6c47ed8b285e9f2af3d093`.
+An allocation-retry experiment is retained under `tools/v41/experiments/` as an
+unapplied patch; applying and rebuilding it requires fresh qualification. This launcher
+reproduces configuration, not a source-to-binary reproducibility claim.
+
 `tools/xolotl/win_fetch_files.py` downloads named files from a Hugging Face repo with curl. It resumes, checks every file against the LFS sha256, and needs no hf CLI. It puts files flat in the target folder, so the tokenizer files can sit next to the model.
 
 Example: the official 1017 Engram shards plus the 1017 GSQ parts, then the join:
